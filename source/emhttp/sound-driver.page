@@ -3,30 +3,24 @@ Icon="sound-driver.png"
 Title="Sound-Driver"
 ---
 <?php
-//Get selected driver version
-$selected_output = shell_exec("/usr/local/emhttp/plugins/sound-driver/include/exec.sh get_selected_output");
+$exec = "/usr/local/emhttp/plugins/sound-driver/include/exec.sh";
+$selected_output = (string)shell_exec("$exec get_selected_output");
 
-//Update driver versions and create file '/tmp/nvidia_driver'
-shell_exec('/usr/local/emhttp/plugins/sound-driver/include/exec.sh update');
-
-$latest_v = shell_exec('/usr/local/emhttp/plugins/sound-driver/include/exec.sh get_latest_version');
-
-//Get current installed driver version
-$installed_v = shell_exec('/usr/local/emhttp/plugins/sound-driver/include/exec.sh get_installed_version');
-
-//Read driver versions from '/tmp/sound_outputs'
-error_reporting(E_ALL);
-ini_set('display_errors',1);
-
+//Outputs found at the last driver load, written by the plugin
 $filename = "/tmp/sound_outputs";
 $eachlines = is_file($filename) ? file($filename, FILE_IGNORE_NEW_LINES) : [];
 
 //The build script holds this lock while it waits for Docker and builds
-$building = trim(shell_exec("flock -n /var/run/sound-driver-build.lock true 2>/dev/null || echo busy")) == "busy";
+$lock = @fopen("/var/run/sound-driver-build.lock", "c");
+$building = $lock && !flock($lock, LOCK_EX | LOCK_NB);
+if ($lock) fclose($lock);
+
+$log = "/var/log/sound-driver-build.log";
 if ($building) {
-  $status = "Sound drivers are being built, you will be notified when they are loaded. Log: /var/log/sound-driver-build.log";
+  $status = "Sound drivers are being built, you will be notified when they are loaded. Log: $log";
 } elseif (!is_dir("/proc/asound") || !$eachlines) {
-  $status = "No sound card found. Build log: /var/log/sound-driver-build.log";
+  $failed = is_file($log) && strpos(file_get_contents($log), "ERROR:") !== false;
+  $status = ($failed ? "Building the sound drivers failed." : "No sound card found.")." Log: $log";
 } else {
   $status = "";
 }
@@ -97,8 +91,8 @@ $(function(){
 //Post audio output
 if(isset($_POST['updateoutput'])) {
 $audio_output = $_POST["audio_output"];
-shell_exec("logger ---Switched main output to: $audio_output---");
-shell_exec("/usr/local/emhttp/plugins/sound-driver/include/exec.sh update_output $audio_output");
+shell_exec("logger ".escapeshellarg("---Switched main output to: $audio_output---"));
+shell_exec("$exec update_output ".escapeshellarg($audio_output));
 echo '<script>parent.window.location.reload();</script>';
 }
 ?>

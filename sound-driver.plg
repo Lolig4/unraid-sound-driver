@@ -2,7 +2,7 @@
 <!DOCTYPE PLUGIN [
 <!ENTITY name "sound-driver">
 <!ENTITY author "Lolig4">
-<!ENTITY version "2026.09.30a">
+<!ENTITY version "2026.09.30b">
 <!ENTITY launch "Settings/sound-driver">
 <!ENTITY gitURL "https://github.com/&author;/unraid-&name;/raw/master">
 <!ENTITY pluginURL "&gitURL;/&name;.plg">
@@ -13,6 +13,13 @@
 <PLUGIN name="&name;" author="&author;" version="&version;" launch="&launch;" pluginURL="&pluginURL;" min="6.9.2" support="https://forums.unraid.net/topic/92865-support-ich777-nvidiadvb-kernel-helperbuilder-docker/">
 
 <CHANGES>
+
+###2026.09.30b
+- Build all sound drivers (PCI, HDA codecs, USB, FireWire), skipping only those the Unraid kernel can't load
+- Build ALSA 1.2.16 with UCM from source, alsactl init works again
+- Restart containers using /dev/snd after the drivers are (re)loaded, so they see the sound card
+- Fix output selection: keep the whole device name and convert formats as needed
+- Fix PHP deprecation warning on the settings page
 
 ###2026.09.30a
 - Settings page shows whether the drivers are being built instead of PHP warnings
@@ -102,11 +109,7 @@ sleep 3
 }
 
 set_default_device() {
-if [ "$(cat &plugin;/settings.cfg | grep "primary_audio_device" | cut -d '=' -f2)" != "empty" ]; then
-  echo -n "pcm."\!"default $(cat &plugin;/settings.cfg | cut -d '=' -f2 | cut -d ':' -f1):$(cat &plugin;/settings.cfg | cut -d '=' -f3 | cut -d ',' -f1)" > /etc/asound.conf
-else
-  echo -n "# ALSA system-wide config file" > /etc/asound.conf
-fi
+&emhttp;/include/exec.sh apply_output
 }
 
 activate() {
@@ -114,6 +117,7 @@ if [ ! -d &plugin;/conf ]; then
   mkdir -p &plugin;/conf
 fi
 if [ ! -f &plugin;/conf/asound.state ]; then
+  alsactl init 2>/dev/null
   alsactl store -f &plugin;/conf/asound.state 2>/dev/null
 else
   alsactl restore -f &plugin;/conf/asound.state 2>/dev/null
@@ -182,6 +186,9 @@ done
 for pkg in /var/log/packages/sound-*-local; do
   [ -e "${pkg}" ] &amp;&amp; removepkg "$(basename "${pkg}")" &gt; /dev/null
 done
+if lsmod | grep -qE "^(snd|soundcore)"; then
+  echo "Sound drivers are still in use, they are gone after the reboot"
+fi
 # Remove plugin related files
 rm -f /etc/asound.conf /tmp/sound_outputs /var/log/sound-driver-build.log /var/run/sound-driver-build.lock
 rm -rf &emhttp;
