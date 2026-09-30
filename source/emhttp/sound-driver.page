@@ -1,0 +1,117 @@
+Menu="Utilities"
+Icon="sound-driver.png"
+Title="Sound-Driver"
+---
+<?php
+//Get selected driver version
+$selected_output = shell_exec("/usr/local/emhttp/plugins/sound-driver/include/exec.sh get_selected_output");
+
+//Update driver versions and create file '/tmp/nvidia_driver'
+shell_exec('/usr/local/emhttp/plugins/sound-driver/include/exec.sh update');
+
+$latest_v = shell_exec('/usr/local/emhttp/plugins/sound-driver/include/exec.sh get_latest_version');
+
+//Get current installed driver version
+$installed_v = shell_exec('/usr/local/emhttp/plugins/sound-driver/include/exec.sh get_installed_version');
+
+//Read driver versions from '/tmp/sound_outputs'
+error_reporting(E_ALL);
+ini_set('display_errors',1);
+
+$filename = "/tmp/sound_outputs";
+$eachlines = file($filename, FILE_IGNORE_NEW_LINES);
+?>
+
+<script>
+//Don't execute commands again if page is refreshed
+    if ( window.history.replaceState ) {
+        window.history.replaceState( null, null, window.location.href );
+    }
+</script>
+
+<script>
+//Disable submit button if no radio button is selected
+$(function(){
+    $("input[type='radio']").change(function(){
+
+        $("input[type='submit']").prop("disabled", false);
+        //Or
+        //$("input[type='submit']").removeAttr("disabled");
+    });
+});
+</script>
+
+<h1 style="text-align: center;"><span style="color: #800000;">Sound Driver</span></a></h1>
+<p style="text-align: center;">TODO</p>
+<div style="width: 50%; float:left">
+    <div id="title">
+        <span class="left"></span>
+    </div>
+    <table class="settings">
+        <tr>
+        <form id="s" method="post" >
+            <td><b><font size="+1">Available Audio Outputs:</font></b></td>
+        </tr>
+        <tr>
+          <td>
+            <p><input type="radio" name="audio_output" value="none" <?php echo ( $selected_output == "empty") ? 'checked="checked"' : ''; ?><b><font color = "red">none</font>: <i>Using sysdefault please see below</i></b> </p>
+              <?php
+              foreach($eachlines as $lines){
+              $arr = explode(" ", $lines);
+              $lines2 = implode(" ", $arr);
+              ?>
+            <p><input type="radio" name="audio_output" value="<?php echo $lines2;?>" <?php echo ( $selected_output == $lines2) ? 'checked="checked"' : '' ?>/> 
+						  <?php echo $lines2;?>
+					  </p>
+             <?php
+					   }
+             ?>
+          </td>
+        </tr>
+
+        <tr>
+          <td>
+            <p><input name="updateoutput" disabled="disabled" type="submit" value="Update"/></p>
+          </td>
+        </tr>
+        </form>
+    </table>
+    <td>
+		<td><?php
+		echo "<a href=\"#\" title='"._("Test Audio")."' onclick=\"openBox('/usr/local/emhttp/plugins/sound-driver/include/test.sh','Testing Audio',500,500,false);return false\"><button type='button'>Test Audio</button></a></a>";
+		?></td>
+	</td>
+</div>
+
+<?php
+//Post audio output
+if(isset($_POST['updateoutput'])) {
+$audio_output = $_POST["audio_output"];
+shell_exec("logger ---Switched main output to: $audio_output---");
+shell_exec("/usr/local/emhttp/plugins/sound-driver/include/exec.sh update_output $audio_output");
+echo '<script>parent.window.location.reload();</script>';
+}
+?>
+
+<div style="width: 50%; float:left">
+    <div id="title">
+        <span class="right"></span>
+    </div>
+    <table class="settings">
+        <tr>
+            <td><b><font size="+1">System Info</font></b></td>
+        </tr>
+        <tr>
+            <td>Unraid Version:</td>
+            <td style="color: #99cc00;"><b><?=`cat /etc/unraid-version | cut -d '"' -f2`?></b></td>
+        </tr>
+        <tr>
+            <td>Kernel:</td>
+            <td style="color: #99cc00;"><b><?=`uname -r`?></b></td>
+        </tr>
+        <tr>
+            <td>Compile Date:</td>
+            <td style="color: #99cc00;"><b><?=`uname -v | cut -d ' ' -f3-`?></b></td>
+        </tr>
+    </table>
+</div>

@@ -1,12 +1,11 @@
 <?xml version="1.0" standalone="yes"?>
 <!DOCTYPE PLUGIN [
 <!ENTITY name "sound-driver">
-<!ENTITY author "ich777">
-<!ENTITY version "2022.07.21">
+<!ENTITY author "Lolig4">
+<!ENTITY version "2026.09.30">
 <!ENTITY launch "Settings/sound-driver">
 <!ENTITY gitURL "https://github.com/&author;/unraid-&name;/raw/master">
 <!ENTITY pluginURL "&gitURL;/&name;.plg">
-<!ENTITY md5 "22fad02435056461129a8c831703e6dc">
 <!ENTITY plugin "/boot/config/plugins/&name;">
 <!ENTITY emhttp "/usr/local/emhttp/plugins/&name;">
 <!ENTITY packages "/boot/config/plugins/&name;/packages">
@@ -14,6 +13,12 @@
 <PLUGIN name="&name;" author="&author;" version="&version;" launch="&launch;" pluginURL="&pluginURL;" min="6.9.2" support="https://forums.unraid.net/topic/92865-support-ich777-nvidiadvb-kernel-helperbuilder-docker/">
 
 <CHANGES>
+
+###2026.09.30
+- Build the sound drivers locally against the running kernel instead of downloading prebuilt packages, which failed to load (unknown acpi_nhlt_* symbols)
+- Build runs in the background once Docker is up and reports via notification
+- Dropped the Plugin Update Helper, packages are rebuilt automatically after a kernel change
+- Settings page is installed from the sources in the repository instead of a prebuilt package
 
 ###2022.07.21
 - Version detection from package via GitHub API
@@ -36,13 +41,41 @@
 
 <FILE Run="/bin/bash">
 <INLINE>
-  rm -f $(ls /boot/config/plugins/&name;/&name;*.txz 2&gt;/dev/null|grep -v '&version;')
+  rm -f /boot/config/plugins/&name;/&name;*.txz
+  rm -rf $(ls -d /boot/config/plugins/&name;/ui-* 2&gt;/dev/null|grep -v '&version;')
+  rm -f $(ls /boot/config/plugins/&name;/build-local-*.sh 2&gt;/dev/null|grep -v '&version;')
+  rm -f /boot/config/plugins/&name;/plugin_update_helper
 </INLINE>
 </FILE>
 
-<FILE Name="/boot/config/plugins/&name;/&name;-&version;.txz" Run="upgradepkg --install-new">
-<URL>&gitURL;/packages/&name;-&version;.txz</URL>
-<MD5>&md5;</MD5>
+<!-- Settings page, kept on flash so it also installs on boot without network -->
+<FILE Name="&plugin;/ui-&version;/sound-driver.page">
+<URL>&gitURL;/source/emhttp/sound-driver.page</URL>
+</FILE>
+
+<FILE Name="&plugin;/ui-&version;/include/exec.sh">
+<URL>&gitURL;/source/emhttp/include/exec.sh</URL>
+</FILE>
+
+<FILE Name="&plugin;/ui-&version;/include/test.sh">
+<URL>&gitURL;/source/emhttp/include/test.sh</URL>
+</FILE>
+
+<FILE Name="&plugin;/ui-&version;/images/sound-driver.png">
+<URL>&gitURL;/source/emhttp/images/sound-driver.png</URL>
+</FILE>
+
+<FILE Run="/bin/bash">
+<INLINE>
+  mkdir -p &emhttp;
+  cp -r &plugin;/ui-&version;/. &emhttp;/
+  chmod -R u=rwX,go=rX &emhttp;
+  chmod 755 &emhttp;/include/*.sh
+</INLINE>
+</FILE>
+
+<FILE Name="&plugin;/build-local-&version;.sh">
+<URL>&gitURL;/source/build-local.sh</URL>
 </FILE>
 
 <FILE Name="&emhttp;/README.md">
@@ -56,61 +89,28 @@ This package contains the Sound Drivers (and also a custom ALSA build) that enab
 <FILE Run="/bin/bash">
 <INLINE>
 
-download() {
-# Download Sound Driver
-if wget -q -nc --show-progress --progress=bar:force:noscroll -O "&packages;/${KERNEL_V%%-*}/${LAT_PACKAGE}" "${DL_URL}/${LAT_PACKAGE}" ; then
-  wget -q -nc --show-progress --progress=bar:force:noscroll -O "&packages;/${KERNEL_V%%-*}/${LAT_PACKAGE}.md5" "${DL_URL}/${LAT_PACKAGE}.md5"
-  if [ "$(md5sum &packages;/${KERNEL_V%%-*}/${LAT_PACKAGE} | awk '{print $1}')" != "$(cat &packages;/${KERNEL_V%%-*}/${LAT_PACKAGE}.md5 | awk '{print $1}')" ]; then
-    echo
-    echo "---CHECKSUM ERROR!---"
-    rm -rf &plugin; &emhttp;
-    exit 1
-  fi
-  echo
-  echo "------------Sucessfully downloaded Sound Drivers, please wait...!------------"
-else
-  echo
-  echo "------------------------Can't download Sound Drivers-------------------------"
-  rm -rf &plugin; &emhttp;
-  exit 1
-fi
-}
-
-check() {
-if ! ls -1 &packages;/${KERNEL_V%%-*}/ | grep -q "${PACKAGE}" ; then
-  LAT_PACKAGE="$(wget -qO- https://api.github.com/repos/ich777/unraid-sound-driver/releases/tags/${KERNEL_V} | jq -r '.assets[].name' | grep "${PACKAGE}" | grep -E -v '\.md5$' | sort -V | tail -1)"
-  echo
-  echo "--------------------------Downloading Sound Drivers--------------------------"
-  echo "---------This could take some time, please don't close this window!----------"
-  download
-else
-  echo
-  echo "-------------------------Sound Drivers found locally-------------------------"
-fi
-}
-
 install() {
 # Install Sound Drivers
-/sbin/installpkg "&packages;/${KERNEL_V%%-*}/${PACKAGE}*.txz"
+/sbin/installpkg "${LOCAL_PKG}"
 depmod -a 2>/dev/null
 sleep 1
 udevadm control --reload 2>/dev/null &amp;&amp; udevadm trigger --action=add 2>/dev/null
 sleep 3
 }
 
-activate() {
-if [ ! -d &plugin;/conf ]; then
-  mkdir -p &plugin;/conf
-fi
+set_default_device() {
 if [ "$(cat &plugin;/settings.cfg | grep "primary_audio_device" | cut -d '=' -f2)" != "empty" ]; then
   echo -n "pcm."\!"default $(cat &plugin;/settings.cfg | cut -d '=' -f2 | cut -d ':' -f1):$(cat &plugin;/settings.cfg | cut -d '=' -f3 | cut -d ',' -f1)" > /etc/asound.conf
 else
   echo -n "# ALSA system-wide config file" > /etc/asound.conf
 fi
-sleep 1
+}
+
+activate() {
+if [ ! -d &plugin;/conf ]; then
+  mkdir -p &plugin;/conf
+fi
 if [ ! -f &plugin;/conf/asound.state ]; then
-  alsactl init -f &plugin;/conf/asound.state 2>/dev/null
-  sleep 1
   alsactl store -f &plugin;/conf/asound.state 2>/dev/null
 else
   alsactl restore -f &plugin;/conf/asound.state 2>/dev/null
@@ -120,11 +120,10 @@ echo -n "$(aplay -L | grep "CARD")" > /tmp/sound_outputs
 
 # Define Variables
 KERNEL_V="$(uname -r)"
-PACKAGE="sound"
-DL_URL="https://github.com/ich777/unraid-sound-driver/releases/download/$KERNEL_V"
+PKG_DIR="&packages;/${KERNEL_V%%-*}"
 
-if [ ! -d "&packages;/${KERNEL_V%%-*}" ]; then
-  mkdir -p "&packages;/${KERNEL_V%%-*}"
+if [ ! -d "${PKG_DIR}" ]; then
+  mkdir -p "${PKG_DIR}"
 fi
 
 #Create settings file if not found
@@ -135,61 +134,30 @@ fi
 #Check for old packages
 rm -rf $(ls -d &packages;/* | grep -v "${KERNEL_V%%-*}")
 
-#Check if Sound Drivers are already downloaded and installed
-check
-if [ ! -f /usr/sbin/alsactl ]; then
+#Only use packages built on this server, drop anything else (e.g. prebuilt
+#packages fetched by ich777's Plugin Update Helper)
+find "${PKG_DIR}" -maxdepth 1 -name 'sound*' ! -name "sound-*-${KERNEL_V}-local.txz*" -delete
+LOCAL_PKG="$(ls -1 ${PKG_DIR}/sound-*-${KERNEL_V}-local.txz 2>/dev/null | sort -V | tail -1)"
+
+set_default_device
+
+if [ -n "${LOCAL_PKG}" ]; then
   echo
-  echo "-------------------Installing Sound Drivers, please wait!--------------------"
-  install &gt; /dev/null
+  echo "-------------------------Sound Drivers found locally-------------------------"
+  if [ ! -f /usr/sbin/alsactl ]; then
+    install &gt; /dev/null
+  fi
   activate
   echo
   echo "------------------Installation of Sound Drivers successful-------------------"
   echo
 else
-  activate
   echo
-  echo "------------------Installation of Sound Drivers successful-------------------"
+  echo "-----------No Sound Drivers built for Kernel ${KERNEL_V} yet------------"
+  echo "----The build starts in the background as soon as Docker is running,-----"
+  echo "-------------------you will be notified when it's done!------------------"
   echo
-fi
-
-#Check if Plugin Update Helper is downloaded and up-to-date
-if [ ! -f &plugin;/plugin_update_helper ]; then
-  wget -q -T 5 -O &plugin;/plugin_update_helper "https://raw.githubusercontent.com/ich777/unraid-plugin_update_helper/master/plugin_update_helper"
-else
-  CUR_V="$(grep -E "Plugin-Update-Helper version:" &plugin;/plugin_update_helper | awk '{print $4}')"
-  if [ ! -s /tmp/update-helper ]; then
-    echo "$(wget -T5 -qO- https://raw.githubusercontent.com/ich777/unraid-plugin_update_helper/master/plugin_update_helper | grep -E "Plugin-Update-Helper version:" | awk '{print $4}')" > /tmp/update-helper
-    AVAIL_V="$(cat /tmp/update-helper)"
-  else
-    AVAIL_V="$(cat /tmp/update-helper)"
-  fi
-  if [ ! -z "$AVAIL_V" ]; then
-    COMPARE="$(sort -V &lt;(echo -e "${AVAIL_V}\n$CUR_V") | tail -1)"
-    if [ "$CUR_V" != "$COMPARE" ]; then
-      wget -q -T 5 -O &plugin;/plugin_update_helper "https://raw.githubusercontent.com/ich777/unraid-plugin_update_helper/master/plugin_update_helper"
-    fi
-  fi
-fi
-
-#Check if Plugin Update Helper is installed and up to date
-if [ ! -f /usr/bin/plugin_update_helper ]; then
-  cp &plugin;/plugin_update_helper /usr/bin/plugin_update_helper
-  chmod +x /usr/bin/plugin_update_helper
-else
-  PLUGIN_V="$(grep -E "Plugin-Update-Helper version:" &plugin;/plugin_update_helper | awk '{print $4}')"
-  INST_V="$(grep -E "Plugin-Update-Helper version:" /usr/bin/plugin_update_helper | awk '{print $4}')"
-  COMPARE="$(sort -V &lt;(echo -e "${PLUGIN_V}\n$INST_V") | tail -1)"
-  if [ "$INST_V" != "$COMPARE" ]; then
-    kill $(ps aux | grep -E "inotifywait -q /boot/changes.txt -e move_self,delete_self" | grep -v "grep -E inotifywait" | awk '{print $2}') 2>/dev/null
-    sleep 1
-    cp &plugin;/plugin_update_helper /usr/bin/plugin_update_helper
-    chmod +x /usr/bin/plugin_update_helper
-  fi
-fi
-
-#Start Plugin Update Helper
-if [ -z "$(ps aux | grep -E "inotifywait -q /boot/changes.txt -e move_self,delete_self" | grep -v "grep -E inotifywait" | awk '{print $2}')" ]; then
-  echo "/usr/bin/plugin_update_helper" | at now &gt; /dev/null 2&gt;&amp;1
+  echo "bash &plugin;/build-local-&version;.sh --wait-docker --install --notify &gt; /var/log/sound-driver-build.log 2&gt;&amp;1" | at now &gt; /dev/null 2&gt;&amp;1
 fi
 
 </INLINE>
@@ -201,8 +169,18 @@ fi
 echo "--------------------------------"
 echo "---Uninstalling Sound Drivers---"
 echo "--------------------------------"
+# Unload the drivers if nothing is using them anymore
+for i in 1 2 3 4 5; do
+  for m in $(lsmod | awk '$1 ~ /^snd|^soundcore$/ {print $1}'); do
+    rmmod "${m}" 2&gt;/dev/null
+  done
+done
+# Remove the locally built package (kernel modules and ALSA)
+for pkg in /var/log/packages/sound-*-local; do
+  [ -e "${pkg}" ] &amp;&amp; removepkg "$(basename "${pkg}")" &gt; /dev/null
+done
 # Remove plugin related files
-removepkg &name;-&version;.txz
+rm -f /etc/asound.conf /tmp/sound_outputs /var/log/sound-driver-build.log /var/run/sound-driver-build.lock
 rm -rf &emhttp;
 rm -rf &plugin;
 echo
