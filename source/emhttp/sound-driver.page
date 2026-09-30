@@ -19,7 +19,17 @@ error_reporting(E_ALL);
 ini_set('display_errors',1);
 
 $filename = "/tmp/sound_outputs";
-$eachlines = file($filename, FILE_IGNORE_NEW_LINES);
+$eachlines = is_file($filename) ? file($filename, FILE_IGNORE_NEW_LINES) : [];
+
+//The build script holds this lock while it waits for Docker and builds
+$building = trim(shell_exec("flock -n /var/run/sound-driver-build.lock true 2>/dev/null || echo busy")) == "busy";
+if ($building) {
+  $status = "Sound drivers are being built, you will be notified when they are loaded. Log: /var/log/sound-driver-build.log";
+} elseif (!is_dir("/proc/asound") || !$eachlines) {
+  $status = "No sound card found. Build log: /var/log/sound-driver-build.log";
+} else {
+  $status = "";
+}
 ?>
 
 <script>
@@ -42,7 +52,7 @@ $(function(){
 </script>
 
 <h1 style="text-align: center;"><span style="color: #800000;">Sound Driver</span></a></h1>
-<p style="text-align: center;">TODO</p>
+<p style="text-align: center;"><?=htmlspecialchars($status)?></p>
 <div style="width: 50%; float:left">
     <div id="title">
         <span class="left"></span>

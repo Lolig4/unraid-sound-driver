@@ -71,6 +71,7 @@ docker info >/dev/null 2>&1 || die "Docker is not running"
 # Use the same gcc release Unraid built its kernel with
 GCC_V="$(grep -oP '^CONFIG_CC_VERSION_TEXT="gcc \(GCC\) \K[0-9.]+' "${UNRAID_SRC}/config")"
 GCC_IMAGE="gcc:${GCC_V}"
+echo "---Pulling gcc ${GCC_V} image, this can take a while---"
 docker pull -q "${GCC_IMAGE}" >/dev/null 2>&1 || GCC_IMAGE="gcc:${GCC_V%%.*}"
 
 # kernel.org names x.y.0 releases linux-x.y
