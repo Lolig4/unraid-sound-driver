@@ -110,12 +110,16 @@ if [ -d "${UNRAID_SRC}/drivers/md" ]; then
   cp -r "${UNRAID_SRC}/drivers/md/." drivers/md/
 fi
 
-# snd-intel-dspcfg selects ACPI_NHLT, which is built into vmlinux and not
-# enabled in the Unraid kernel. With it the modules reference acpi_nhlt_*
-# symbols that do not exist and snd-hda-intel fails to load. Without it the
-# NHLT helpers fall back to the stubs in include/acpi/nhlt.h.
-sed -i '/^config SND_INTEL_DSP_CONFIG/,/^config /{/select ACPI_NHLT if ACPI/d}' \
-  sound/hda/core/Kconfig
+# snd-intel-dspcfg selects ACPI_NHLT, which is built into vmlinux. Older
+# Unraid kernels do not enable it: with the select the modules reference
+# acpi_nhlt_* symbols that do not exist and snd-hda-intel fails to load.
+# Without it the NHLT helpers fall back to the stubs in include/acpi/nhlt.h.
+NHLT_IN_KERNEL=0
+grep -q '^CONFIG_ACPI_NHLT=y' "${UNRAID_SRC}/config" && NHLT_IN_KERNEL=1
+if [ "${NHLT_IN_KERNEL}" = 0 ]; then
+  sed -i '/^config SND_INTEL_DSP_CONFIG/,/^config /{/select ACPI_NHLT if ACPI/d}' \
+    sound/hda/core/Kconfig
+fi
 
 cp "${UNRAID_SRC}/config" .config
 cp "${UNRAID_SRC}/config" "${WORK_DIR}/unraid.config"
@@ -131,7 +135,7 @@ import glob, re, subprocess, sys
 SKIP = re.compile(r"KUNIT|_TEST$|TEST_|DEBUG")
 # Values that follow the toolchain, not the configuration
 TOOLCHAIN = re.compile(r"_VERSION(_TEXT)?$|^(RUSTC|CC_HAS|CC_CAN|CC_IS|AS_HAS|AS_IS"
-                       r"|LD_HAS|LD_CAN|LD_IS|PAHOLE|TOOLS_SUPPORT|GCC|CLANG)_")
+                       r"|LD_HAS|LD_CAN|LD_IS|PAHOLE|TOOLS_SUPPORT|GCC|CLANG)_|^RUST_IS_AVAILABLE$")
 END_BLOCK = {"menu", "endmenu", "choice", "endchoice", "if", "endif", "source",
              "comment", "mainmenu"}
 
@@ -329,7 +333,9 @@ docker run --rm \
   -v "/lib/modules/${UNAME}:/hostmods:ro" \
   "${GCC_IMAGE}" bash /work/build.sh
 
-grep -q '^CONFIG_ACPI_NHLT=y' .config && die "ACPI_NHLT got enabled, modules would not load"
+if [ "${NHLT_IN_KERNEL}" = 0 ] && grep -q '^CONFIG_ACPI_NHLT=y' .config; then
+  die "ACPI_NHLT got enabled, modules would not load"
+fi
 
 # Assemble the package: kernel modules plus ALSA (already in pkg/)
 PKG_ROOT="${WORK_DIR}/pkg"
@@ -388,6 +394,22 @@ if [ "${INSTALL}" = "1" ]; then
   udevadm control --reload
   udevadm trigger --action=add
   udevadm settle
+  # Unraid 7.4 blacklists snd_hda_intel, so udev does not load it: load the
+  # sound drivers for unbound devices by name, which ignores the blacklist
+  for alias in /sys/bus/pci/devices/*/modalias /sys/bus/usb/devices/*/modalias; do
+    dev="${alias%/modalias}"
+    [ -e "${dev}/driver" ] && continue
+    # Leave GPU audio (same slot as a display controller) free for VM passthrough
+    case "${dev}" in
+      /sys/bus/pci/*) grep -qs '^0x03' "${dev%.*}.0/class" && continue ;;
+    esac
+    for m in $(modprobe -R "$(cat "${alias}")" 2>/dev/null | sort -u); do
+      case "$(modinfo -n "${m}" 2>/dev/null)" in
+        */kernel/sound/*) modprobe "${m}" 2>/dev/null || true ;;
+      esac
+    done
+  done
+  udevadm settle
   sleep 2
   # Reloading the modules resets the mixer, bring back the saved levels
   mkdir -p "$(dirname "${STATE}")"
@@ -399,6 +421,7 @@ if [ "${INSTALL}" = "1" ]; then
   fi
   # Output list for the plugin's settings page
   echo -n "$(aplay -L | grep "CARD")" > /tmp/sound_outputs
+  [ -e /proc/asound/cards ] || die "no sound modules got loaded"
   cat /proc/asound/cards
   start_stopped
   RESULT="built and loaded"

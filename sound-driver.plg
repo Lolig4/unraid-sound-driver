@@ -2,7 +2,7 @@
 <!DOCTYPE PLUGIN [
 <!ENTITY name "sound-driver">
 <!ENTITY author "Lolig4">
-<!ENTITY version "2026.09.30b">
+<!ENTITY version "2026.11.11">
 <!ENTITY launch "Settings/sound-driver">
 <!ENTITY gitURL "https://github.com/&author;/unraid-&name;/raw/master">
 <!ENTITY pluginURL "&gitURL;/&name;.plg">
@@ -13,6 +13,10 @@
 <PLUGIN name="&name;" author="&author;" version="&version;" launch="&launch;" pluginURL="&pluginURL;" min="6.9.2" support="https://github.com/&author;/unraid-&name;/issues">
 
 <CHANGES>
+
+###2026.11.11
+- Support Unraid 7.4: keep ACPI_NHLT when the Unraid kernel has it built in
+- Load the sound drivers even though Unraid 7.4 blacklists snd_hda_intel (GPU audio is left alone for VM passthrough)
 
 ###2026.09.30b
 - Build all sound drivers (PCI, HDA codecs, USB, FireWire), skipping only those the Unraid kernel can't load
@@ -105,6 +109,22 @@ install() {
 depmod -a 2>/dev/null
 sleep 1
 udevadm control --reload 2>/dev/null &amp;&amp; udevadm trigger --action=add 2>/dev/null
+udevadm settle 2>/dev/null
+# Unraid 7.4 blacklists snd_hda_intel, so udev does not load it: load the
+# sound drivers for unbound devices by name, which ignores the blacklist
+for alias in /sys/bus/pci/devices/*/modalias /sys/bus/usb/devices/*/modalias; do
+  dev="${alias%/modalias}"
+  [ -e "${dev}/driver" ] &amp;&amp; continue
+  # Leave GPU audio (same slot as a display controller) free for VM passthrough
+  case "${dev}" in
+    /sys/bus/pci/*) grep -qs '^0x03' "${dev%.*}.0/class" &amp;&amp; continue ;;
+  esac
+  for m in $(modprobe -R "$(cat "${alias}")" 2&gt;/dev/null | sort -u); do
+    case "$(modinfo -n "${m}" 2&gt;/dev/null)" in
+      */kernel/sound/*) modprobe "${m}" 2&gt;/dev/null || true ;;
+    esac
+  done
+done
 sleep 3
 }
 
